@@ -1,0 +1,610 @@
+version: '3.8'
+
+services:
+  # Zookeeper - Required for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    networks:
+      - vehicle-network
+
+  # Kafka Broker
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_LOG_RETENTION_HOURS: 168  # 7 days
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - vehicle-network
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # Eclipse Mosquitto MQTT Broker
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: mosquitto
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-logs:/mosquitto/log
+    networks:
+      - vehicle-network
+    restart: unless-stopped
+
+  # Kafka Topic Init (Creates topics on startup)
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - vehicle-network
+    entrypoint: ['/bin/sh', '-c']
+    command: |
+      "
+      echo 'Waiting for Kafka to be ready...'
+      sleep 10
+      
+      echo 'Creating Kafka topics...'
+      kafka-topics --create --if-not-exists \
+        --bootstrap-server kafka:9093 \
+        --topic vehicle_telemetry_raw \
+        --partitions 12 \
+        --replication-factor 1 \
+        --config retention.ms=604800000
+      
+      kafka-topics --create --if-not-exists \
+        --bootstrap-server kafka:9093 \
+        --topic vehicle_telemetry_clean \
+        --partitions 12 \
+        --replication-factor 1 \
+        --config retention.ms=604800000
+      
+      kafka-topics --create --if-not-exists \
+        --bootstrap-server kafka:9093 \
+        --topic vehicle_anomalies \
+        --partitions 6 \
+        --replication-factor 1 \
+        --config retention.ms=604800000
+      
+      kafka-topics --create --if-not-exists \
+        --bootstrap-server kafka:9093 \
+        --topic vehicle_predictions \
+        --partitions 12 \
+        --replication-factor 1 \
+        --config retention.ms=604800000
+      
+      kafka-topics --create --if-not-exists \
+        --bootstrap-server kafka:9093 \
+        --topic vehicle_alerts \
+        --partitions 6 \
+        --replication-factor 1 \
+        --config retention.ms=604800000
+      
+      # Phase 4: Agent Communication Topics
+      kafka-topics --create --if-not-exists \
+        --bootstrap-server kafka:9093 \
+        --topic diagnostic_results \
+        --partitions 12 \
+        --replication-factor 1 \
+        --config retention.ms=604800000
+      
+      kafka-topics --create --if-not-exists \
+        --bootstrap-server kafka:9093 \
+        --topic customer_ack \
+        --partitions 6 \
+        --replication-factor 1 \
+        --config retention.ms=604800000
+      
+      kafka-topics --create --if-not-exists \
+        --bootstrap-server kafka:9093 \
+        --topic service_requests \
+        --partitions 6 \
+        --replication-factor 1 \
+        --config retention.ms=604800000
+      
+      kafka-topics --create --if-not-exists \
+        --bootstrap-server kafka:9093 \
+        --topic manufacturing_feedback \
+        --partitions 3 \
+        --replication-factor 1 \
+        --config retention.ms=2592000000
+      
+      kafka-topics --create --if-not-exists \
+        --bootstrap-server kafka:9093 \
+        --topic agent_activity_log \
+        --partitions 12 \
+        --replication-factor 1 \
+        --config retention.ms=604800000
+      
+      kafka-topics --create --if-not-exists \
+        --bootstrap-server kafka:9093 \
+        --topic security_alerts \
+        --partitions 3 \
+        --replication-factor 1 \
+        --config retention.ms=2592000000
+      
+      echo 'Topics created successfully!'
+      kafka-topics --list --bootstrap-server kafka:9093
+      "
+
+  # ClickHouse Server - Phase 2: Time-series database for telemetry storage
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    container_name: clickhouse
+    ports:
+      - "8123:8123"  # HTTP interface
+      - "9000:9000"  # Native client
+    environment:
+      CLICKHOUSE_DB: telemetry_db
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse_pass
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+      - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - vehicle-network
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ClickHouse Client - For manual queries and testing
+  clickhouse-client:
+    image: clickhouse/clickhouse-client:23.8
+    container_name: clickhouse-client
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - vehicle-network
+    command: ['--host', 'clickhouse', '--user', 'default', '--password', 'clickhouse_pass']
+    profiles:
+      - tools
+
+  # MongoDB - Phase 4: Agent state, customer data, schedules
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: mongodb_pass
+      MONGO_INITDB_DATABASE: agents_db
+    volumes:
+      - mongodb-data:/data/db
+      - mongodb-config:/data/configdb
+    networks:
+      - vehicle-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # =========================================================================
+  # PHASE 4: AUTONOMOUS AGENTS
+  # =========================================================================
+
+  # Master Agent - Orchestrates all worker agents
+  master-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agents
+    container_name: master-agent
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9093
+      MONGODB_URI: mongodb://admin:mongodb_pass@mongodb:27017/
+      MONGODB_DATABASE: agents_db
+      PYTHONUNBUFFERED: 1
+    command: python agents/master_agent.py
+    volumes:
+      - ../agents:/app/agents
+      - ../logs:/app/logs
+    networks:
+      - vehicle-network
+    restart: unless-stopped
+    profiles:
+      - agents
+
+  # Diagnostics Agent - Performs RCA on vehicle alerts
+  diagnostics-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agents
+    container_name: diagnostics-agent
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9093
+      MONGODB_URI: mongodb://admin:mongodb_pass@mongodb:27017/
+      MONGODB_DATABASE: agents_db
+      PYTHONUNBUFFERED: 1
+    command: python agents/diagnostics_agent.py
+    volumes:
+      - ../agents:/app/agents
+      - ../logs:/app/logs
+    networks:
+      - vehicle-network
+    restart: unless-stopped
+    profiles:
+      - agents
+
+  # Customer Agent - Sends notifications (SMS/Email/WhatsApp)
+  customer-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agents
+    container_name: customer-agent
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9093
+      MONGODB_URI: mongodb://admin:mongodb_pass@mongodb:27017/
+      MONGODB_DATABASE: agents_db
+      PYTHONUNBUFFERED: 1
+    command: python agents/customer_agent.py
+    volumes:
+      - ../agents:/app/agents
+      - ../logs:/app/logs
+    networks:
+      - vehicle-network
+    restart: unless-stopped
+    profiles:
+      - agents
+
+  # Scheduling Agent - Auto-books maintenance slots
+  scheduling-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agents
+    container_name: scheduling-agent
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9093
+      MONGODB_URI: mongodb://admin:mongodb_pass@mongodb:27017/
+      MONGODB_DATABASE: agents_db
+      PYTHONUNBUFFERED: 1
+    command: python agents/scheduling_agent.py
+    volumes:
+      - ../agents:/app/agents
+      - ../logs:/app/logs
+    networks:
+      - vehicle-network
+    restart: unless-stopped
+    profiles:
+      - agents
+
+  # Manufacturing Agent - Detects patterns and generates CAPA
+  manufacturing-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agents
+    container_name: manufacturing-agent
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9093
+      MONGODB_URI: mongodb://admin:mongodb_pass@mongodb:27017/
+      MONGODB_DATABASE: agents_db
+      PYTHONUNBUFFERED: 1
+    command: python agents/manufacturing_agent.py
+    volumes:
+      - ../agents:/app/agents
+      - ../logs:/app/logs
+    networks:
+      - vehicle-network
+    restart: unless-stopped
+    profiles:
+      - agents
+
+  # UEBA Agent - Monitors agent behavior for anomalies
+  ueba-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agents
+    container_name: ueba-agent
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9093
+      MONGODB_URI: mongodb://admin:mongodb_pass@mongodb:27017/
+      MONGODB_DATABASE: agents_db
+      PYTHONUNBUFFERED: 1
+    command: python agents/ueba_agent.py
+    volumes:
+      - ../agents:/app/agents
+      - ../logs:/app/logs
+    networks:
+      - vehicle-network
+    restart: unless-stopped
+    profiles:
+      - agents
+
+  # Agent Dashboard API - Real-time monitoring dashboard
+  agent-dashboard:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: agent-dashboard
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "8002:8002"
+    environment:
+      MONGODB_URI: mongodb://admin:mongodb_pass@mongodb:27017/
+      MONGODB_DATABASE: agents_db
+      AGENT_DASHBOARD_PORT: 8002
+      AGENT_DASHBOARD_HOST: 0.0.0.0
+      PYTHONUNBUFFERED: 1
+    command: python api/fastapi_agent_dashboard.py
+    volumes:
+      - ../api:/app/api
+      - ../logs:/app/logs
+    networks:
+      - vehicle-network
+    restart: unless-stopped
+    profiles:
+      - agents
+
+  # =========================================================================
+  # PHASE 5: MANUFACTURING FEEDBACK & RCA WITH CLICKHOUSE INTEGRATION
+  # =========================================================================
+
+  # Manufacturing Agent Phase 5 - Enhanced with ClickHouse historical analytics
+  manufacturing-agent-phase5:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agents
+    container_name: manufacturing-agent-phase5
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9093
+      MONGODB_URI: mongodb://admin:mongodb_pass@mongodb:27017/
+      MONGODB_DATABASE: agents_db
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 9000
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse_pass
+      CLICKHOUSE_DATABASE: telemetry_db
+      PYTHONUNBUFFERED: 1
+    command: python agents/manufacturing_agent_phase5.py
+    volumes:
+      - ../agents:/app/agents
+      - ../logs:/app/logs
+    networks:
+      - vehicle-network
+    restart: unless-stopped
+    profiles:
+      - phase5
+
+  # Manufacturing Feedback Dashboard - Phase 5 visualization and monitoring
+  manufacturing-dashboard:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: manufacturing-dashboard
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "8003:8003"
+    environment:
+      MONGODB_URI: mongodb://admin:mongodb_pass@mongodb:27017/
+      MONGODB_DATABASE: agents_db
+      MANUFACTURING_DASHBOARD_PORT: 8003
+      MANUFACTURING_DASHBOARD_HOST: 0.0.0.0
+      PYTHONUNBUFFERED: 1
+    command: python api/fastapi_manufacturing_dashboard.py
+    volumes:
+      - ../api:/app/api
+      - ../logs:/app/logs
+    networks:
+      - vehicle-network
+    restart: unless-stopped
+    profiles:
+      - phase5
+
+  # =========================================================================
+  # PHASE 6: UEBA WITH ELASTICSEARCH
+  # =========================================================================
+
+  # ElasticSearch - Long-term log storage and search
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: elasticsearch
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - ELASTIC_PASSWORD=elastic_pass
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - vehicle-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    profiles:
+      - phase6
+
+  # Kibana - Visualization and dashboards for ElasticSearch
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: kibana
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=elastic_pass
+      - XPACK_SECURITY_ENABLED=false
+    volumes:
+      - kibana-data:/usr/share/kibana/data
+    networks:
+      - vehicle-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    profiles:
+      - phase6
+
+  # UEBA Agent Phase 6 - Behavioral analytics with anomaly detection
+  ueba-agent-phase6:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agents
+    container_name: ueba-agent-phase6
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9093
+      KAFKA_ACTIVITY_LOG_TOPIC: agent_activity_log
+      KAFKA_SECURITY_ALERTS_TOPIC: security_alerts
+      UEBA_CONSUMER_GROUP: ueba_phase6_group
+      MONGODB_URI: mongodb://admin:mongodb_pass@mongodb:27017/
+      MONGODB_DATABASE: agents_db
+      ELASTICSEARCH_HOST: elasticsearch:9200
+      UEBA_WINDOW_MINUTES: 5
+      UEBA_ANOMALY_THRESHOLD: 0.7
+      UEBA_CONTAMINATION: 0.1
+      PYTHONUNBUFFERED: 1
+    command: python agents/ueba_agent_phase6.py
+    volumes:
+      - ../agents:/app/agents
+      - ../logs:/app/logs
+    networks:
+      - vehicle-network
+    restart: unless-stopped
+    profiles:
+      - phase6
+
+  # UEBA Dashboard - Monitoring and visualization API
+  ueba-dashboard:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: ueba-dashboard
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    ports:
+      - "8004:8004"
+    environment:
+      MONGODB_URI: mongodb://admin:mongodb_pass@mongodb:27017/
+      MONGODB_DATABASE: agents_db
+      ELASTICSEARCH_HOST: elasticsearch:9200
+      UEBA_DASHBOARD_PORT: 8004
+      PYTHONUNBUFFERED: 1
+    command: python dashboards/ueba_dashboard.py
+    volumes:
+      - ../dashboards:/app/dashboards
+      - ../logs:/app/logs
+    networks:
+      - vehicle-network
+    restart: unless-stopped
+    profiles:
+      - phase6
+
+networks:
+  vehicle-network:
+    driver: bridge
+
+volumes:
+  zookeeper-data:
+  zookeeper-logs:
+  kafka-data:
+  mosquitto-data:
+  mosquitto-logs:
+  clickhouse-data:
+  clickhouse-logs:
+  mongodb-data:
+  mongodb-config:
+  elasticsearch-data:
+  kibana-data:

@@ -1,0 +1,10 @@
+engine_rpm
+engine_temp
+vibration
+speed
+fuel_level
+battery_voltage
+rolling_avg_rpm
+rolling_avg_temp
+rolling_avg_vibration
+rolling_avg_speed
