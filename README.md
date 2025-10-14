@@ -599,7 +599,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📞 Support
 
 - **Issues:** [GitHub Issues](https://github.com/PranavOaR/agentic-ai/issues)
-- **Email:** your.email@example.com
+- **Email:** pranavrao168@gmail.com
 - **Documentation:** [API Docs](http://localhost:8000/docs)
 
 ---
