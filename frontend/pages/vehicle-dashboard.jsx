@@ -3,20 +3,17 @@ import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import Layout from '@/components/Layout';
 import VehicleCard from '@/components/VehicleCard';
-import { AlertList } from '@/components/AlertCard';
 import { TelemetryChart } from '@/components/AnimatedChart';
-import { vehicleService, alertService } from '@/services';
+import { vehicleService } from '@/services';
 import useStore from '@/store/useStore';
 import { usePolling } from '@/hooks/usePolling';
-import { RefreshCw, Search, Filter } from 'lucide-react';
+import { RefreshCw, Search } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function VehicleDashboard() {
   const {
     vehicles,
     setVehicles,
-    alerts,
-    setAlerts,
     fleetStats,
     setFleetStats,
     filters,
@@ -27,40 +24,52 @@ export default function VehicleDashboard() {
   const [vehiclePredictions, setVehiclePredictions] = useState({});
 
   // Fetch vehicles
-  const { refetch: refetchVehicles, isLoading: vehiclesLoading } = useQuery({
+  const { data: vehiclesData, refetch: refetchVehicles, isLoading: vehiclesLoading, error: vehiclesError } = useQuery({
     queryKey: ['vehicles'],
     queryFn: vehicleService.getVehicles,
-    onSuccess: (data) => {
-      setVehicles(data.vehicles || data);
-    },
-    onError: (error) => {
-      toast.error('Failed to load vehicles');
-      console.error(error);
-    },
+    refetchInterval: 30000,
+    staleTime: 0, // Always fetch fresh data
+    cacheTime: 0, // Don't cache
   });
 
-  // Fetch alerts
-  const { refetch: refetchAlerts } = useQuery({
-    queryKey: ['alerts'],
-    queryFn: () => alertService.getAlerts(),
-    onSuccess: (data) => {
-      setAlerts(data.alerts || data);
-    },
-  });
+  // Update store when vehicles data changes
+  useEffect(() => {
+    if (vehiclesData) {
+      const vehiclesList = vehiclesData.vehicles || vehiclesData;
+      console.log('Dashboard: Setting vehicles in store', vehiclesList.length);
+      setVehicles(vehiclesList);
+    }
+  }, [vehiclesData, setVehicles]);
+
+  // Show error toast for vehicles
+  useEffect(() => {
+    if (vehiclesError) {
+      toast.error('Failed to load vehicles');
+      console.error(vehiclesError);
+    }
+  }, [vehiclesError]);
 
   // Fetch fleet stats
-  useQuery({
+  const { data: fleetStatsData } = useQuery({
     queryKey: ['fleetStats'],
     queryFn: vehicleService.getFleetStats,
-    onSuccess: (data) => {
-      setFleetStats(data);
-    },
+    refetchInterval: 30000,
   });
+
+  // Update store when fleet stats data changes
+  useEffect(() => {
+    if (fleetStatsData) {
+      setFleetStats(fleetStatsData);
+    }
+  }, [fleetStatsData, setFleetStats]);
+
+  // Use vehicles from query data or store
+  const activeVehicles = vehiclesData?.vehicles || vehiclesData || vehicles;
 
   // Fetch predictions for each vehicle
   useEffect(() => {
     const fetchPredictions = async () => {
-      for (const vehicle of vehicles) {
+      for (const vehicle of activeVehicles) {
         try {
           const prediction = await vehicleService.getVehicleStatus(vehicle.vehicle_id);
           setVehiclePredictions((prev) => ({
@@ -73,60 +82,42 @@ export default function VehicleDashboard() {
       }
     };
 
-    if (vehicles.length > 0) {
+    if (activeVehicles.length > 0) {
       fetchPredictions();
     }
-  }, [vehicles]);
+  }, [activeVehicles.length]); // Use length to avoid infinite loop
 
   // Polling for updates
   usePolling(
     () => {
       refetchVehicles();
-      refetchAlerts();
     },
     parseInt(process.env.NEXT_PUBLIC_POLLING_INTERVAL) || 10000,
     true
   );
 
   // Filter vehicles
-  const filteredVehicles = vehicles.filter((vehicle) => {
+  const filteredVehicles = activeVehicles.filter((vehicle) => {
+    // Check search query match
+    const matchesSearch = filters.searchQuery
+      ? vehicle.vehicle_id.toLowerCase().includes(filters.searchQuery.toLowerCase())
+      : true;
+
+    // Check status filter match - use vehicle.status directly from API
+    let matchesStatus = true;
     if (filters.vehicleStatus !== 'all') {
-      const prediction = vehiclePredictions[vehicle.vehicle_id];
-      if (!prediction || prediction.prediction !== filters.vehicleStatus) {
-        return false;
-      }
+      matchesStatus = vehicle.status === filters.vehicleStatus;
     }
 
-    if (filters.searchQuery) {
-      return vehicle.vehicle_id
-        .toLowerCase()
-        .includes(filters.searchQuery.toLowerCase());
-    }
-
-    return true;
+    // Both conditions must be true
+    return matchesSearch && matchesStatus;
   });
 
-  // Filter alerts
-  const filteredAlerts = alerts.filter((alert) => {
-    if (filters.alertSeverity !== 'all' && alert.severity !== filters.alertSeverity) {
-      return false;
-    }
-    return true;
-  });
+  console.log('Dashboard: Active vehicles:', activeVehicles.length, 'Filtered:', filteredVehicles.length, 'Filter:', filters.vehicleStatus);
 
   const handleVehicleClick = (vehicle) => {
     setSelectedVehicle(vehicle);
     toast.info(`Selected vehicle: ${vehicle.vehicle_id}`);
-  };
-
-  const handleAcknowledgeAlert = async (alert) => {
-    try {
-      await alertService.acknowledgeAlert(alert.id);
-      toast.success('Alert acknowledged');
-      refetchAlerts();
-    } catch (error) {
-      toast.error('Failed to acknowledge alert');
-    }
   };
 
   return (
@@ -221,14 +212,14 @@ export default function VehicleDashboard() {
           <input
             type="text"
             placeholder="Search vehicles..."
-            className="w-full pl-10 pr-4 py-2 border border-dark-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+            className="w-full pl-10 pr-4 py-2 border border-dark-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 text-dark-900 placeholder-dark-400 bg-white"
             value={filters.searchQuery}
             onChange={(e) => updateFilter('searchQuery', e.target.value)}
           />
         </div>
 
         <select
-          className="px-4 py-2 border border-dark-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+          className="px-4 py-2 border border-dark-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 text-dark-900 bg-white"
           value={filters.vehicleStatus}
           onChange={(e) => updateFilter('vehicleStatus', e.target.value)}
         >
@@ -242,7 +233,6 @@ export default function VehicleDashboard() {
           className="btn-primary flex items-center space-x-2"
           onClick={() => {
             refetchVehicles();
-            refetchAlerts();
             toast.success('Data refreshed');
           }}
           whileHover={{ scale: 1.05 }}
@@ -253,21 +243,29 @@ export default function VehicleDashboard() {
         </motion.button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="space-y-6">
         {/* Vehicle Grid */}
-        <div className="lg:col-span-2 space-y-6">
-          <div>
-            <h2 className="text-xl font-semibold text-dark-900 mb-4">
-              Fleet Vehicles ({filteredVehicles.length})
-            </h2>
+        <div>
+          <h2 className="text-xl font-semibold text-dark-900 mb-4">
+            Fleet Vehicles ({filteredVehicles.length})
+          </h2>
             {vehiclesLoading ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {[1, 2, 3, 4].map((i) => (
                   <div key={i} className="skeleton h-48 rounded-lg" />
                 ))}
               </div>
+            ) : filteredVehicles.length === 0 ? (
+              <div className="card text-center py-12">
+                <p className="text-dark-500 text-lg mb-2">No vehicles found</p>
+                <p className="text-dark-400 text-sm">
+                  {activeVehicles.length === 0 
+                    ? 'Loading vehicles...' 
+                    : 'Try adjusting your filters'}
+                </p>
+              </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 {filteredVehicles.map((vehicle, index) => (
                   <VehicleCard
                     key={vehicle.vehicle_id}
@@ -280,40 +278,13 @@ export default function VehicleDashboard() {
             )}
           </div>
 
-          {/* Telemetry Chart */}
-          {selectedVehicle && (
-            <TelemetryChart
-              data={selectedVehicle.history || []}
-              metrics={['engine_temp', 'vibration', 'engine_rpm']}
-            />
-          )}
-        </div>
-
-        {/* Alerts Panel */}
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold text-dark-900">
-              Active Alerts ({filteredAlerts.length})
-            </h2>
-            <select
-              className="text-sm px-3 py-1 border border-dark-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-              value={filters.alertSeverity}
-              onChange={(e) => updateFilter('alertSeverity', e.target.value)}
-            >
-              <option value="all">All Severity</option>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="critical">Critical</option>
-            </select>
-          </div>
-
-          <AlertList
-            alerts={filteredAlerts}
-            onAcknowledge={handleAcknowledgeAlert}
-            maxDisplay={20}
+        {/* Telemetry Chart */}
+        {selectedVehicle && (
+          <TelemetryChart
+            data={selectedVehicle.history || []}
+            metrics={['engine_temp', 'vibration', 'engine_rpm']}
           />
-        </div>
+        )}
       </div>
     </Layout>
   );

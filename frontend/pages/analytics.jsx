@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import Layout from '@/components/Layout';
 import { AlertDistributionChart, ComponentTrendsChart } from '@/components/AnimatedChart';
-import { analyticsService } from '@/services';
+import { analyticsService, manufacturingService } from '@/services';
 import { motion } from 'framer-motion';
 import { TrendingUp, TrendingDown, Activity } from 'lucide-react';
 
@@ -14,6 +14,12 @@ export default function Analytics() {
   const { data: metrics } = useQuery({
     queryKey: ['aggregatedMetrics'],
     queryFn: () => analyticsService.getAggregatedMetrics('24h'),
+  });
+
+  const { data: failureTrends } = useQuery({
+    queryKey: ['failureTrends'],
+    queryFn: () => manufacturingService.getComponentTrends(null, 30),
+    refetchInterval: 60000, // Refetch every minute
   });
 
   return (
@@ -67,7 +73,7 @@ export default function Analytics() {
           ]}
         />
         <ComponentTrendsChart
-          data={metrics?.component_trends || []}
+          data={failureTrends?.trends || []}
         />
       </div>
     </Layout>

@@ -205,9 +205,9 @@ export function ComponentTrendsChart({ data }) {
       data={data}
       type="area"
       title="Component Failure Trends"
-      dataKeys={['failures']}
+      dataKeys={['cooling_system', 'engine_mount', 'electrical_system']}
       height={300}
-      colors={['#f59e0b']}
+      colors={['#3b82f6', '#f59e0b', '#ef4444']}
       xAxisKey="date"
     />
   );

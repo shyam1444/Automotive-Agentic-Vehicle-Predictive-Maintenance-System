@@ -49,8 +49,24 @@ body {
     @apply bg-danger-600 hover:bg-danger-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-200;
   }
   
+  .btn-success {
+    @apply bg-success-600 hover:bg-success-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-200;
+  }
+  
+  .btn-sm {
+    @apply py-1.5 px-3 text-sm;
+  }
+  
+  .btn-outline-danger {
+    @apply border-2 border-danger-600 text-danger-600 hover:bg-danger-50 font-semibold py-2 px-4 rounded-lg transition-colors duration-200;
+  }
+  
   .badge {
     @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  
+  .badge-primary {
+    @apply bg-primary-100 text-primary-800;
   }
   
   .badge-success {

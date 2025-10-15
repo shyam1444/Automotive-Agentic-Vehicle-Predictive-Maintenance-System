@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Layout from '@/components/Layout';
 import CAPATable from '@/components/CAPATable';
@@ -8,17 +9,44 @@ import useStore from '@/store/useStore';
 export default function Manufacturing() {
   const { capaFeedback, setCapaFeedback, componentTrends, setComponentTrends } = useStore();
 
-  useQuery({
+  // Fixed React Query v5 compatibility - removed deprecated onSuccess
+  const { data: capaFeedbackData } = useQuery({
     queryKey: ['capaFeedback'],
     queryFn: manufacturingService.getCapaFeedback,
-    onSuccess: (data) => setCapaFeedback(data.feedback || data),
+    refetchInterval: 30000,
+    staleTime: 0,
   });
 
-  useQuery({
+  const { data: componentTrendsData } = useQuery({
     queryKey: ['componentTrends'],
     queryFn: () => manufacturingService.getComponentTrends(null, 30),
-    onSuccess: (data) => setComponentTrends(data),
+    refetchInterval: 30000,
+    staleTime: 0,
   });
+
+  // Update store when data changes
+  useEffect(() => {
+    if (capaFeedbackData) {
+      const feedbackList = capaFeedbackData.feedback || capaFeedbackData;
+      console.log('Manufacturing: Setting CAPA feedback in store', feedbackList.length);
+      setCapaFeedback(feedbackList);
+    }
+  }, [capaFeedbackData, setCapaFeedback]);
+
+  useEffect(() => {
+    if (componentTrendsData) {
+      const trendsList = componentTrendsData.trends || componentTrendsData;
+      console.log('Manufacturing: Setting component trends in store', trendsList.length);
+      setComponentTrends(trendsList);
+    }
+  }, [componentTrendsData, setComponentTrends]);
+
+  // Use direct data with store fallback for immediate display
+  const activeCapa = capaFeedbackData?.feedback || capaFeedbackData || capaFeedback;
+  const activeTrends = componentTrendsData?.trends || componentTrendsData || componentTrends;
+
+  console.log('Manufacturing: activeTrends', activeTrends);
+  console.log('Manufacturing: componentTrendsData', componentTrendsData);
 
   return (
     <Layout>
@@ -29,17 +57,17 @@ export default function Manufacturing() {
 
       <div className="space-y-6">
         {/* Component Trends Chart */}
-        {componentTrends && Object.keys(componentTrends).length > 0 && (
-          <ComponentTrendsChart data={componentTrends.trends || []} />
+        {activeTrends && Array.isArray(activeTrends) && activeTrends.length > 0 && (
+          <ComponentTrendsChart data={activeTrends} />
         )}
 
         {/* CAPA Table */}
         <div>
           <h2 className="text-xl font-semibold text-dark-900 mb-4">
-            CAPA Reports ({capaFeedback.length})
+            CAPA Reports ({activeCapa.length})
           </h2>
           <CAPATable
-            data={capaFeedback}
+            data={activeCapa}
             onRowClick={(item) => console.log('CAPA clicked:', item)}
           />
         </div>

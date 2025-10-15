@@ -26,6 +26,13 @@ export default function FleetPage() {
     },
   });
 
+  // Fetch fleet stats
+  const { data: fleetStats, refetch: refetchStats } = useQuery({
+    queryKey: ['fleetStats'],
+    queryFn: vehicleService.getFleetStats,
+    refetchInterval: 30000,
+  });
+
   // Fetch predictions for each vehicle
   const vehicleIds = vehiclesData?.vehicles?.map(v => v.vehicle_id) || [];
   
@@ -74,6 +81,7 @@ export default function FleetPage() {
 
   const handleRefresh = () => {
     refetch();
+    refetchStats();
     toast.success('Fleet data refreshed');
   };
 
@@ -145,29 +153,27 @@ export default function FleetPage() {
           {[
             {
               label: 'Total Vehicles',
-              value: vehiclesData?.count || 0,
+              value: fleetStats?.total_vehicles || vehiclesData?.count || 0,
               color: 'blue',
+              icon: '🚗',
             },
             {
               label: 'Healthy',
-              value: filteredVehicles.filter(
-                (v) => predictionsData?.[v.vehicle_id]?.status === 'healthy'
-              ).length,
+              value: fleetStats?.healthy || 0,
               color: 'green',
+              icon: '✅',
             },
             {
               label: 'Warning',
-              value: filteredVehicles.filter(
-                (v) => predictionsData?.[v.vehicle_id]?.status === 'warning'
-              ).length,
+              value: fleetStats?.warning || 0,
               color: 'yellow',
+              icon: '⚠️',
             },
             {
               label: 'Critical',
-              value: filteredVehicles.filter(
-                (v) => predictionsData?.[v.vehicle_id]?.status === 'critical'
-              ).length,
+              value: fleetStats?.critical || 0,
               color: 'red',
+              icon: '🚨',
             },
           ].map((stat, index) => (
             <motion.div
@@ -186,10 +192,8 @@ export default function FleetPage() {
                     {stat.value}
                   </p>
                 </div>
-                <div
-                  className={`w-12 h-12 rounded-lg bg-${stat.color}-100 flex items-center justify-center`}
-                >
-                  <MapPin className={`w-6 h-6 text-${stat.color}-600`} />
+                <div className="text-3xl">
+                  {stat.icon}
                 </div>
               </div>
             </motion.div>

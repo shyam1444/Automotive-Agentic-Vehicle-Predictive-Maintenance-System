@@ -98,7 +98,7 @@ export const maintenanceService = {
 
   // Update maintenance status
   updateMaintenanceStatus: async (scheduleId, status) => {
-    const response = await apiClient.put(`/schedules/${scheduleId}`, { status });
+    const response = await apiClient.put(`/schedules/${scheduleId}/status?status=${status}`);
     return response.data;
   },
 
