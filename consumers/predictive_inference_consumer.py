@@ -9,10 +9,14 @@ Consumes cleaned telemetry, runs failure prediction, publishes alerts.
 import os
 import asyncio
 import signal
+import sys
+import platform
 import json
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.signal_handler import setup_signal_handlers
 
 import joblib
 import numpy as np
@@ -567,17 +571,24 @@ class PredictiveInferenceConsumer:
 async def main():
     consumer = PredictiveInferenceConsumer()
     
-    # Handle graceful shutdown
-    loop = asyncio.get_event_loop()
+    # Set up cross-platform signal handlers
+    shutdown_event = setup_signal_handlers()
     
-    def signal_handler():
-        logger.info("⚠️ Received shutdown signal")
-        asyncio.create_task(consumer.shutdown())
-    
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, signal_handler)
-    
-    await consumer.start()
+    try:
+        # Start consumer
+        await consumer.start()
+        
+        # Wait for shutdown signal
+        await shutdown_event.wait()
+        logger.info("⚠️ Shutdown signal received, stopping consumer...")
+        await consumer.shutdown()
+    except KeyboardInterrupt:
+        logger.info("⚠️ Received KeyboardInterrupt")
+        await consumer.shutdown()
+    except Exception as e:
+        logger.error(f"❌ Error in main: {e}")
+        await consumer.shutdown()
+        raise
 
 if __name__ == "__main__":
     asyncio.run(main())

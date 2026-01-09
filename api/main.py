@@ -86,6 +86,81 @@ async def health_check():
         }
     }
 
+@app.get("/debug/clickhouse", tags=["Debug"])
+async def debug_clickhouse():
+    """Debug endpoint to test ClickHouse connection and query"""
+    try:
+        from clickhouse_driver import Client
+        client = Client(
+            host=os.getenv("CLICKHOUSE_HOST", "localhost"),
+            port=int(os.getenv("CLICKHOUSE_PORT", "9000")),
+            user=os.getenv("CLICKHOUSE_USER", "default"),
+            password=os.getenv("CLICKHOUSE_PASSWORD", "clickhouse_pass"),
+            database=os.getenv("CLICKHOUSE_DATABASE", "telemetry_db")
+        )
+        
+        # Test connection
+        test_result = client.execute("SELECT 1")
+        
+        # Test count query
+        count_query = "SELECT count() FROM telemetry WHERE timestamp >= now() - INTERVAL 24 HOUR"
+        count_result = client.execute(count_query)
+        total_count = count_result[0][0] if count_result else 0
+        
+        # Test vehicles query
+        vehicles_query = """
+        WITH latest_data AS (
+            SELECT 
+                vehicle_id,
+                engine_temp,
+                vibration,
+                battery_voltage,
+                engine_rpm,
+                speed,
+                fuel_level,
+                ROW_NUMBER() OVER (PARTITION BY vehicle_id ORDER BY timestamp DESC) as rn
+            FROM telemetry
+            WHERE timestamp >= now() - INTERVAL 24 HOUR
+        )
+        SELECT 
+            vehicle_id,
+            engine_temp,
+            vibration,
+            battery_voltage,
+            engine_rpm,
+            speed,
+            fuel_level
+        FROM latest_data
+        WHERE rn = 1
+        ORDER BY vehicle_id
+        LIMIT 5
+        """
+        vehicles_result = client.execute(vehicles_query)
+        vehicles_count = len(vehicles_result) if vehicles_result else 0
+        
+        return {
+            "status": "connected",
+            "test_query": "success",
+            "total_records_24h": total_count,
+            "vehicles_found": vehicles_count,
+            "sample_vehicles": [
+                {
+                    "vehicle_id": row[0],
+                    "engine_temp": row[1],
+                    "vibration": row[2],
+                    "battery_voltage": row[3]
+                }
+                for row in vehicles_result[:5]
+            ] if vehicles_result else []
+        }
+    except Exception as e:
+        logger.error(f"Debug ClickHouse error: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "type": type(e).__name__
+        }
+
 # ============================================================================
 # IMPORT AND MOUNT SUB-APPLICATIONS
 # ============================================================================
@@ -108,38 +183,49 @@ try:
                 database=os.getenv("CLICKHOUSE_DATABASE", "telemetry_db")
             )
             
+            # Test connection and verify database
+            client.execute("USE telemetry_db")
+            db_check = client.execute("SELECT currentDatabase()")
+            logger.info(f"Connected to database: {db_check[0][0] if db_check else 'unknown'}")
+            
             # Get latest telemetry with status calculation
+            # Use argMax to get latest record per vehicle (simpler than window function)
             query = """
-            WITH latest_data AS (
-                SELECT 
-                    vehicle_id,
-                    engine_temp,
-                    vibration,
-                    battery_voltage,
-                    engine_rpm,
-                    speed,
-                    fuel_level,
-                    ROW_NUMBER() OVER (PARTITION BY vehicle_id ORDER BY timestamp DESC) as rn
-                FROM telemetry
-                WHERE timestamp >= now() - INTERVAL 1 HOUR
-            )
             SELECT 
                 vehicle_id,
-                engine_temp,
-                vibration,
-                battery_voltage,
-                engine_rpm,
-                speed,
-                fuel_level
-            FROM latest_data
-            WHERE rn = 1
+                argMax(engine_temp, timestamp) as engine_temp,
+                argMax(vibration, timestamp) as vibration,
+                argMax(battery_voltage, timestamp) as battery_voltage,
+                argMax(engine_rpm, timestamp) as engine_rpm,
+                argMax(speed, timestamp) as speed,
+                argMax(fuel_level, timestamp) as fuel_level
+            FROM telemetry_db.telemetry
+            WHERE timestamp >= now() - INTERVAL 24 HOUR
+            GROUP BY vehicle_id
             ORDER BY vehicle_id
             """
+            # First test a simple query without time filter
+            test_query = "SELECT count() FROM telemetry_db.telemetry"
+            test_result = client.execute(test_query)
+            logger.info(f"Total records in table: {test_result[0][0] if test_result else 0}")
+            
+            # Test with time filter
+            test_query2 = "SELECT count() FROM telemetry_db.telemetry WHERE timestamp >= now() - INTERVAL 24 HOUR"
+            test_result2 = client.execute(test_query2)
+            logger.info(f"Records in last 24h: {test_result2[0][0] if test_result2 else 0}")
+            
             result = client.execute(query)
+            logger.info(f"Main query returned {len(result) if result else 0} rows")
+            if result:
+                logger.info(f"First row sample: {result[0] if len(result) > 0 else 'N/A'}")
             
             vehicles = []
             for row in result:
-                vehicle_id, engine_temp, vibration, battery_voltage, engine_rpm, speed, fuel_level = row
+                try:
+                    vehicle_id, engine_temp, vibration, battery_voltage, engine_rpm, speed, fuel_level = row
+                except Exception as unpack_error:
+                    logger.error(f"Error unpacking row: {unpack_error}, row: {row}")
+                    continue
                 
                 # Determine status based on thresholds
                 if engine_temp > 110 or vibration > 8 or battery_voltage < 11:
@@ -160,9 +246,10 @@ try:
                     "fuel_level": fuel_level
                 })
             
+            logger.info(f"Returning {len(vehicles)} vehicles")
             return {"vehicles": vehicles, "count": len(vehicles)}
         except Exception as e:
-            logger.error(f"Error fetching vehicles: {e}")
+            logger.error(f"Error fetching vehicles: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
     
     @app.get("/fleet/stats", tags=["Telemetry"])
@@ -179,7 +266,7 @@ try:
             )
             
             # Get total vehicles
-            total_query = "SELECT COUNT(DISTINCT vehicle_id) FROM telemetry"
+            total_query = "SELECT COUNT(DISTINCT vehicle_id) FROM telemetry_db.telemetry"
             total_result = client.execute(total_query)
             total_vehicles = total_result[0][0] if total_result else 0
             
@@ -192,8 +279,8 @@ try:
                     vibration,
                     battery_voltage,
                     ROW_NUMBER() OVER (PARTITION BY vehicle_id ORDER BY timestamp DESC) as rn
-                FROM telemetry
-                WHERE timestamp >= now() - INTERVAL 1 HOUR
+                FROM telemetry_db.telemetry
+                WHERE timestamp >= now() - INTERVAL 24 HOUR
             )
             SELECT 
                 vehicle_id,
@@ -399,7 +486,7 @@ async def get_alerts(severity: str = None):
                 fuel_level,
                 ROW_NUMBER() OVER (PARTITION BY vehicle_id ORDER BY timestamp DESC) as rn
             FROM telemetry
-            WHERE timestamp >= now() - INTERVAL 1 HOUR
+            WHERE timestamp >= now() - INTERVAL 24 HOUR
         )
         SELECT 
             vehicle_id,
@@ -555,7 +642,7 @@ async def get_maintenance_schedules(days_ahead: int = 7, status: str = None):
                 timestamp,
                 ROW_NUMBER() OVER (PARTITION BY vehicle_id ORDER BY timestamp DESC) as rn
             FROM telemetry
-            WHERE timestamp >= now() - INTERVAL 1 HOUR
+            WHERE timestamp >= now() - INTERVAL 24 HOUR
         )
         SELECT 
             vehicle_id,
@@ -893,7 +980,7 @@ async def get_security_alerts():
                 stddevSamp(vibration) as std_vib,
                 MAX(timestamp) as last_seen
             FROM telemetry
-            WHERE timestamp >= now() - INTERVAL 1 HOUR
+            WHERE timestamp >= now() - INTERVAL 24 HOUR
             GROUP BY vehicle_id
         ),
         latest_readings AS (
@@ -906,7 +993,7 @@ async def get_security_alerts():
                 timestamp,
                 ROW_NUMBER() OVER (PARTITION BY vehicle_id ORDER BY timestamp DESC) as rn
             FROM telemetry
-            WHERE timestamp >= now() - INTERVAL 5 MINUTE
+            WHERE timestamp >= now() - INTERVAL 1 HOUR
         )
         SELECT 
             lr.vehicle_id,

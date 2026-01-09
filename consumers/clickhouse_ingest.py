@@ -17,9 +17,14 @@ Features:
 import asyncio
 import json
 import signal
+import sys
+import platform
 from datetime import datetime
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.signal_handler import setup_signal_handlers
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from clickhouse_driver import Client
@@ -364,10 +369,24 @@ class ClickHouseIngestConsumer:
         """Publish detected anomalies to Kafka and ClickHouse"""
         try:
             for anomaly in anomalies:
-                # Convert to dict with string timestamps
-                # Handle both datetime objects and datetime objects
-                timestamp_str = anomaly.timestamp.strftime("%Y-%m-%d %H:%M:%S") if isinstance(anomaly.timestamp, datetime) else str(anomaly.timestamp)
-                detected_at_str = anomaly.detected_at.strftime("%Y-%m-%d %H:%M:%S") if isinstance(anomaly.detected_at, datetime) else str(anomaly.detected_at)
+                # Ensure timestamp and detected_at are datetime objects
+                if isinstance(anomaly.timestamp, str):
+                    timestamp_dt = datetime.fromisoformat(anomaly.timestamp.replace('Z', '+00:00'))
+                elif isinstance(anomaly.timestamp, datetime):
+                    timestamp_dt = anomaly.timestamp
+                else:
+                    timestamp_dt = datetime.now()
+                
+                if isinstance(anomaly.detected_at, str):
+                    detected_at_dt = datetime.fromisoformat(anomaly.detected_at.replace('Z', '+00:00'))
+                elif isinstance(anomaly.detected_at, datetime):
+                    detected_at_dt = anomaly.detected_at
+                else:
+                    detected_at_dt = datetime.now()
+                
+                # Convert to dict with string timestamps for Kafka (JSON serialization)
+                timestamp_str = timestamp_dt.strftime("%Y-%m-%d %H:%M:%S")
+                detected_at_str = detected_at_dt.strftime("%Y-%m-%d %H:%M:%S")
                 
                 anomaly_dict = {
                     'vehicle_id': anomaly.vehicle_id,
@@ -387,7 +406,7 @@ class ClickHouseIngestConsumer:
                     value=anomaly_dict
                 )
                 
-                # Insert directly into ClickHouse anomalies table
+                # Insert directly into ClickHouse anomalies table (use datetime objects)
                 self.clickhouse_client.execute(
                     """
                     INSERT INTO anomalies 
@@ -397,14 +416,14 @@ class ClickHouseIngestConsumer:
                     """,
                     [(
                         anomaly.vehicle_id,
-                        anomaly.timestamp,
+                        timestamp_dt,  # Use datetime object
                         anomaly.anomaly_type,
                         anomaly.severity,
                         anomaly.metric_name,
                         anomaly.metric_value,
                         anomaly.threshold,
                         anomaly.message,
-                        anomaly.detected_at
+                        detected_at_dt  # Use datetime object
                     )]
                 )
                 
@@ -527,17 +546,24 @@ class ClickHouseIngestConsumer:
 async def main():
     consumer = ClickHouseIngestConsumer()
     
-    # Handle graceful shutdown
-    loop = asyncio.get_event_loop()
+    # Set up cross-platform signal handlers
+    shutdown_event = setup_signal_handlers()
     
-    def signal_handler():
-        logger.info("⚠️ Received shutdown signal")
-        asyncio.create_task(consumer.shutdown())
-    
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, signal_handler)
-    
-    await consumer.start()
+    try:
+        # Start consumer
+        await consumer.start()
+        
+        # Wait for shutdown signal
+        await shutdown_event.wait()
+        logger.info("⚠️ Shutdown signal received, stopping consumer...")
+        await consumer.shutdown()
+    except KeyboardInterrupt:
+        logger.info("⚠️ Received KeyboardInterrupt")
+        await consumer.shutdown()
+    except Exception as e:
+        logger.error(f"❌ Error in main: {e}")
+        await consumer.shutdown()
+        raise
 
 if __name__ == "__main__":
     asyncio.run(main())
