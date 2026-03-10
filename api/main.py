@@ -166,6 +166,13 @@ async def debug_clickhouse():
 # ============================================================================
 
 try:
+    from api.nlp_endpoints import router as nlp_router
+    app.include_router(nlp_router)
+    logger.info("✅ NLP endpoints mounted")
+except Exception as e:
+    logger.warning(f"⚠️ Could not import NLP endpoints: {e}")
+
+try:
     # Import telemetry routes
     from api.fastapi_telemetry_service import app as telemetry_app
     

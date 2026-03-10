@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import Layout from '@/components/Layout';
 import { AlertDistributionChart, ComponentTrendsChart } from '@/components/AnimatedChart';
+import Chatbot from '@/components/Chatbot';
 import { analyticsService, manufacturingService } from '@/services';
 import { motion } from 'framer-motion';
 import { TrendingUp, TrendingDown, Activity } from 'lucide-react';
@@ -75,6 +76,12 @@ export default function Analytics() {
         <ComponentTrendsChart
           data={failureTrends?.trends || []}
         />
+      </div>
+
+      {/* RAG Chatbot */}
+      <div className="mt-8">
+        <h2 className="text-2xl font-bold text-dark-900 mb-4">AI Maintenance Assistant</h2>
+        <Chatbot />
       </div>
     </Layout>
   );
