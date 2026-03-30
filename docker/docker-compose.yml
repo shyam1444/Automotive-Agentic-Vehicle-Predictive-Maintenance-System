@@ -79,93 +79,37 @@ services:
     networks:
       - vehicle-network
     entrypoint: ['/bin/sh', '-c']
-    command: |
-      "
-      echo 'Waiting for Kafka to be ready...'
-      sleep 10
-      
-      echo 'Creating Kafka topics...'
-      kafka-topics --create --if-not-exists \
-        --bootstrap-server kafka:9093 \
-        --topic vehicle_telemetry_raw \
-        --partitions 12 \
-        --replication-factor 1 \
-        --config retention.ms=604800000
-      
-      kafka-topics --create --if-not-exists \
-        --bootstrap-server kafka:9093 \
-        --topic vehicle_telemetry_clean \
-        --partitions 12 \
-        --replication-factor 1 \
-        --config retention.ms=604800000
-      
-      kafka-topics --create --if-not-exists \
-        --bootstrap-server kafka:9093 \
-        --topic vehicle_anomalies \
-        --partitions 6 \
-        --replication-factor 1 \
-        --config retention.ms=604800000
-      
-      kafka-topics --create --if-not-exists \
-        --bootstrap-server kafka:9093 \
-        --topic vehicle_predictions \
-        --partitions 12 \
-        --replication-factor 1 \
-        --config retention.ms=604800000
-      
-      kafka-topics --create --if-not-exists \
-        --bootstrap-server kafka:9093 \
-        --topic vehicle_alerts \
-        --partitions 6 \
-        --replication-factor 1 \
-        --config retention.ms=604800000
-      
-      # Phase 4: Agent Communication Topics
-      kafka-topics --create --if-not-exists \
-        --bootstrap-server kafka:9093 \
-        --topic diagnostic_results \
-        --partitions 12 \
-        --replication-factor 1 \
-        --config retention.ms=604800000
-      
-      kafka-topics --create --if-not-exists \
-        --bootstrap-server kafka:9093 \
-        --topic customer_ack \
-        --partitions 6 \
-        --replication-factor 1 \
-        --config retention.ms=604800000
-      
-      kafka-topics --create --if-not-exists \
-        --bootstrap-server kafka:9093 \
-        --topic service_requests \
-        --partitions 6 \
-        --replication-factor 1 \
-        --config retention.ms=604800000
-      
-      kafka-topics --create --if-not-exists \
-        --bootstrap-server kafka:9093 \
-        --topic manufacturing_feedback \
-        --partitions 3 \
-        --replication-factor 1 \
-        --config retention.ms=2592000000
-      
-      kafka-topics --create --if-not-exists \
-        --bootstrap-server kafka:9093 \
-        --topic agent_activity_log \
-        --partitions 12 \
-        --replication-factor 1 \
-        --config retention.ms=604800000
-      
-      kafka-topics --create --if-not-exists \
-        --bootstrap-server kafka:9093 \
-        --topic security_alerts \
-        --partitions 3 \
-        --replication-factor 1 \
-        --config retention.ms=2592000000
-      
-      echo 'Topics created successfully!'
-      kafka-topics --list --bootstrap-server kafka:9093
-      "
+    command:
+      - |
+        echo 'Waiting for Kafka to be ready...'
+        sleep 10
+        
+        echo 'Creating Kafka topics...'
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9093 --topic vehicle_telemetry_raw --partitions 12 --replication-factor 1 --config retention.ms=604800000
+        
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9093 --topic vehicle_telemetry_clean --partitions 12 --replication-factor 1 --config retention.ms=604800000
+        
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9093 --topic vehicle_anomalies --partitions 6 --replication-factor 1 --config retention.ms=604800000
+        
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9093 --topic vehicle_predictions --partitions 12 --replication-factor 1 --config retention.ms=604800000
+        
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9093 --topic vehicle_alerts --partitions 6 --replication-factor 1 --config retention.ms=604800000
+        
+        # Phase 4: Agent Communication Topics
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9093 --topic diagnostic_results --partitions 12 --replication-factor 1 --config retention.ms=604800000
+        
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9093 --topic customer_ack --partitions 6 --replication-factor 1 --config retention.ms=604800000
+        
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9093 --topic service_requests --partitions 6 --replication-factor 1 --config retention.ms=604800000
+        
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9093 --topic manufacturing_feedback --partitions 3 --replication-factor 1 --config retention.ms=2592000000
+        
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9093 --topic agent_activity_log --partitions 12 --replication-factor 1 --config retention.ms=604800000
+        
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9093 --topic security_alerts --partitions 3 --replication-factor 1 --config retention.ms=2592000000
+        
+        echo 'Topics created successfully!'
+        kafka-topics --list --bootstrap-server kafka:9093
 
   # ClickHouse Server - Phase 2: Time-series database for telemetry storage
   clickhouse:
